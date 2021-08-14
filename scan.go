@@ -21,20 +21,29 @@ var banner = `
     \/  \/ \_|          \___/ \____/ \____/ 
                                             
    [+] WP Install and Setup Scanner
-   [+] Recoded By TiGER HeX [+] We Are TiGER HeX\n\n`
+   [+] Recoded By TiGER HeX [+] We Are TiGER HeX`
 var usage = "USAGE:\tscan [--jobs jobsnum] FILE "
 
 var jobs int
 var wg sync.WaitGroup
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
-func scan(domains chan string, installWriter, setupWriter io.Writer) {
-	for d := range domains {
-		resp, err := http.Get(d)
+func scan(urls chan string, installWriter, setupWriter io.Writer) {
+
+	tr := &http.Transport{
+		IdleConnTimeout:    5 * time.Second,
+		DisableCompression: true,
+	}
+	client := &http.Client{Transport: tr}
+	defer wg.Done()
+
+	for url := range urls {
+		resp, err := client.Get(url)
 		if err != nil {
 			fmt.Println(err.Error())
 			continue
 		}
+		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println(err.Error())
@@ -42,17 +51,15 @@ func scan(domains chan string, installWriter, setupWriter io.Writer) {
 			continue
 		}
 		if strings.Contains(string(b), "WordPress &rsaquo; Installation") {
-			fmt.Fprintf(installWriter, d+"\n")
-			fmt.Println("\t[+] Install ===>", d)
+			fmt.Fprintln(installWriter, url)
+			fmt.Println("\t[+] Install ===>", url)
 		} else if strings.Contains(string(b), "WordPress &rsaquo; Setup Configuration File") {
-			fmt.Fprintf(setupWriter, d+"\n")
-			fmt.Println("\t[+] Setup ===>", d)
+			fmt.Fprintln(setupWriter, url)
+			fmt.Println("\t[+] Setup ===>", url)
 		} else {
-			fmt.Println(" [+] Failed ===>", d)
+			fmt.Println(" [+] Failed ===>", url)
 		}
-		resp.Body.Close()
 	}
-	wg.Done()
 }
 
 func main() {
@@ -66,6 +73,7 @@ func main() {
 	f, err := os.Open(flag.Arg(0))
 	if err != nil {
 		fmt.Printf(err.Error())
+		return
 	}
 	defer f.Close()
 	domainReader := bufio.NewReader(f)
@@ -86,14 +94,18 @@ func main() {
 	/*--------------------------------------------------------------------------------*/
 
 	/*--------------------------------START GOROUTINES--------------------------------*/
-	domains := make(chan string)
+	url_chan := make(chan string)
 	for i := 0; i < jobs; i++ {
 		wg.Add(1)
-		go scan(domains, fi, fs)
+		go scan(url_chan, fi, fs)
 	}
 	/*--------------------------------------------------------------------------------*/
 
-	/*-----------------------------SEND FILEDATA TO THEM------------------------------*/
+	/*----------------------------SEND URLS+PATH TO THEM------------------------------*/
+
+	paths := []string{"/", "/wordpress/", "/wp/", "/blog/", "/new/", "/old/", "/newsite/",
+		"/test/", "/dev/", "/New/", "/Wp/", "/Wordpress/", "/Blog/", "/Newsite/", "/Dev/", "Test/", "Old/"}
+
 	for {
 		line, _, err := domainReader.ReadLine()
 		if err == io.EOF {
@@ -101,12 +113,14 @@ func main() {
 		} else if err != nil {
 			panic("while reading domain list file")
 		}
-		domains <- string(line)
+		for _, path := range paths {
+			url_chan <- "http://" + string(line) + path
+		}
 	}
 	/*--------------------------------------------------------------------------------*/
 
 	/*--------------------------------CLOSE CONNECTION--------------------------------*/
-	close(domains)
+	close(url_chan)
 	wg.Wait()
 	fmt.Println("Time", time.Now().Sub(start))
 	return
@@ -114,7 +128,7 @@ func main() {
 
 func init() {
 	//setting jobs flag to parse with initial value of 48 goroutines
-	flag.IntVar(&jobs, "jobs", 48, "number of goroutines to run")
+	flag.IntVar(&jobs, "jobs", 300, "number of goroutines to run")
 	flag.Parse()
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
