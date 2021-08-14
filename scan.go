@@ -21,20 +21,18 @@ var banner = `
     \/  \/ \_|          \___/ \____/ \____/ 
                                             
    [+] WP Install and Setup Scanner
-   [+] Recoded By TiGER HeX
-   [+] We Are TiGER HeX
-`
+   [+] Recoded By TiGER HeX [+] We Are TiGER HeX\n\n`
+var usage = "USAGE:\tscan [--jobs jobsnum] FILE "
+
 var jobs int
-var usage = "USAGE:\tscan FILE [--jobs jobsnum]"
 var wg sync.WaitGroup
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
-func scan(domains chan string, installWriter, setupWriter *bufio.Writer) {
+func scan(domains chan string, installWriter, setupWriter io.Writer) {
 	for d := range domains {
 		resp, err := http.Get(d)
 		if err != nil {
 			fmt.Println(err.Error())
-			resp.Body.Close()
 			continue
 		}
 		b, err := io.ReadAll(resp.Body)
@@ -44,10 +42,10 @@ func scan(domains chan string, installWriter, setupWriter *bufio.Writer) {
 			continue
 		}
 		if strings.Contains(string(b), "WordPress &rsaquo; Installation") {
-			installWriter.WriteString(string(b))
+			fmt.Fprintf(installWriter, d+"\n")
 			fmt.Println("\t[+] Install ===>", d)
 		} else if strings.Contains(string(b), "WordPress &rsaquo; Setup Configuration File") {
-			setupWriter.WriteString(string(b))
+			fmt.Fprintf(setupWriter, d+"\n")
 			fmt.Println("\t[+] Setup ===>", d)
 		} else {
 			fmt.Println(" [+] Failed ===>", d)
@@ -63,8 +61,9 @@ func main() {
 	start := time.Now()
 
 	/*---------------------------------FILEWORK---------------------------------------*/
+
 	//Initializing domain file reader
-	f, err := os.Open(os.Args[1])
+	f, err := os.Open(flag.Arg(0))
 	if err != nil {
 		fmt.Printf(err.Error())
 	}
@@ -72,29 +71,25 @@ func main() {
 	domainReader := bufio.NewReader(f)
 
 	//Creating install.txt and initializing writer on it
-
-	fi, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 440)
+	fi, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	defer fi.Close()
-	iw := bufio.NewWriter(fi)
 
 	//Creating setup.txt and initializing writer on it
-
-	fs, err := os.OpenFile("setup.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 440)
+	fs, err := os.OpenFile("setup.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	defer fs.Close()
-	sw := bufio.NewWriter(fs)
 	/*--------------------------------------------------------------------------------*/
 
 	/*--------------------------------START GOROUTINES--------------------------------*/
 	domains := make(chan string)
 	for i := 0; i < jobs; i++ {
 		wg.Add(1)
-		go scan(domains, iw, sw)
+		go scan(domains, fi, fs)
 	}
 	/*--------------------------------------------------------------------------------*/
 
