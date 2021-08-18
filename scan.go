@@ -33,6 +33,7 @@ const (
 
 	maxRedirects = 20
 	maxBodySize  = 15000
+	minBodySize  = 2000
 )
 
 var (
@@ -43,62 +44,50 @@ var (
 
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true, // Don't send: User-Agent: fasthttp
-		MaxConnsPerHost:          20,
 		MaxConnDuration:          10 * time.Second,
 		MaxIdleConnDuration:      10 * time.Second,
-		ReadTimeout:              10 * time.Second,
-		WriteTimeout:             10 * time.Second,
+		MaxResponseBodySize:      maxBodySize,
 	}
 )
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
-func scanner(urls chan string, installWriter, setupWriter io.Writer) {
+func scanner(urlCh, resultCh, errCh chan string) {
 
 	res := fasthttp.AcquireResponse()
 	req := fasthttp.AcquireRequest()
 
-	defer wg.Done()
 	defer fasthttp.ReleaseResponse(res)
 	defer fasthttp.ReleaseRequest(req)
-
-	req.SetConnectionClose()
+	defer wg.Done()
 
 	bodyBuff := make([]byte, maxBodySize)
 
-	for url := range urls {
+	for url := range urlCh {
 		req.SetRequestURI(url)
+		req.SetConnectionClose()
+
 		err := client.DoRedirects(req, res, maxRedirects)
-
 		if err != nil {
-			fmt.Println(" [-] Bad Response ===>", url)
-			logger.Printf("%v ===> %s\n", err.Error(), url)
+			resultCh <- fmt.Sprintf(" [-] Bad Response ===> %s\n", url)
+			errCh <- fmt.Sprintf("%s ===> %s\n", err.Error(), url)
 			continue
 		}
 
-		code := res.StatusCode()
-		bodySize := len(res.Body())
-
-		if code != 200 || bodySize > maxBodySize {
-			fmt.Println(" [-] Failed ===>", url, code)
-			logger.Printf("Bad code(%d )or bodyLen(%d) ===> %s\n", code, bodySize, url)
-			continue
-		}
-
-		//Save body from erase to body buffer
+		//Save body from erase
 		copy(bodyBuff, res.Body())
 
-		//Check this body contain pattern
+		code := res.StatusCode()
+		if code != 200 {
+			resultCh <- fmt.Sprintf(" [-] Failed ===> %s %d\n", url, code)
+			continue
+		}
+
 		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
-			fmt.Fprintln(installWriter, url)
-			fmt.Println("\t[+] Install ===>", url, code, bodySize)
+			resultCh <- fmt.Sprintf("\t[+] Install ===> %s %d\n", url, code)
 		} else if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Setup Configuration File") {
-			fmt.Fprintln(setupWriter, url)
-			fmt.Println("\t[+] Setup ===>", url, code, bodySize)
+			resultCh <- fmt.Sprintf("\t[+] Setup ===> %s %d\n", url, code)
 		} else {
-			if strings.Contains(url, "myfallretreat.conwaybcm.com/newsite") {
-				fmt.Println("DEBUG ", bodyBuff)
-			}
-			fmt.Println(" [-] Failed ===>", url, code)
+			resultCh <- fmt.Sprintf(" [-] Failed ===> %s %d\n", url, code)
 		}
 	}
 }
@@ -146,34 +135,57 @@ func main() {
 
 	start := time.Now()
 
-	url_chan := make(chan string, jobs)
+	urlCh := make(chan string, jobs)
+	resCh := make(chan string, jobs)
+	errCh := make(chan string, jobs)
+
 	for i := 0; i < jobs; i++ {
 		wg.Add(1)
-		go scanner(url_chan, fi, fs)
+		go scanner(urlCh, resCh, errCh)
 	}
+
+	// Response writer goroutine
+	//wg.Add(1)
+	go func() {
+		//defer wg.Done()
+		for {
+			select {
+			case err := <-errCh:
+				logger.Print(err)
+			case res := <-resCh:
+				fmt.Print(res)
+			default:
+				break
+			}
+		}
+	}()
+
 	/*--------------------------------------------------------------------------------*/
 	/*----------------------------READ & SEND URL+PATH TO THEM------------------------*/
 
-	paths := []string{"/", "wordpress/", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "backup/"}
+	paths := []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
 
 	for {
 		line, _, err := domainReader.ReadLine()
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			fmt.Println("while reading domain list file")
+			fmt.Println("Error occured while reading domain list file")
 			logger.Println(err)
 			return
 		}
-
 		for _, path := range paths {
-			url_chan <- "http://" + string(line) + path
+			urlCh <- "http://" + string(line) + path
 		}
 	}
+
 	/*--------------------------------------------------------------------------------*/
 	/*-------------------------------- 		END 	  --------------------------------*/
-	close(url_chan)
+
+	close(urlCh)
 	wg.Wait()
+	close(errCh)
+	close(resCh)
 	fmt.Println("Time", time.Now().Sub(start))
 }
 
