@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"strings"
 	"sync"
@@ -41,17 +39,16 @@ var (
 	wg   sync.WaitGroup
 
 	logger *log.Logger
-
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true, // Don't send: User-Agent: fasthttp
-		MaxConnDuration:          10 * time.Second,
+		MaxConnDuration:          time.Minute,
 		MaxIdleConnDuration:      10 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
 	}
 )
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
-func scanner(urlCh, resultCh, errCh chan string) {
+func scan(urlCh, insCh, setCh, failCh, errCh chan string) {
 
 	res := fasthttp.AcquireResponse()
 	req := fasthttp.AcquireRequest()
@@ -64,30 +61,29 @@ func scanner(urlCh, resultCh, errCh chan string) {
 
 	for url := range urlCh {
 		req.SetRequestURI(url)
-		req.SetConnectionClose()
 
 		err := client.DoRedirects(req, res, maxRedirects)
 		if err != nil {
-			resultCh <- fmt.Sprintf(" [-] Bad Response ===> %s\n", url)
+			failCh <- url
 			errCh <- fmt.Sprintf("%s ===> %s\n", err.Error(), url)
 			continue
 		}
 
 		//Save body from erase
 		copy(bodyBuff, res.Body())
+		//bodyBuff = res.Body()
 
-		code := res.StatusCode()
-		if code != 200 {
-			resultCh <- fmt.Sprintf(" [-] Failed ===> %s %d\n", url, code)
+		if res.StatusCode() != 200 {
+			failCh <- fmt.Sprintf("%s [%d]", url, res.StatusCode())
 			continue
 		}
 
 		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
-			resultCh <- fmt.Sprintf("\t[+] Install ===> %s %d\n", url, code)
+			insCh <- url
 		} else if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Setup Configuration File") {
-			resultCh <- fmt.Sprintf("\t[+] Setup ===> %s %d\n", url, code)
+			setCh <- url
 		} else {
-			resultCh <- fmt.Sprintf(" [-] Failed ===> %s %d\n", url, code)
+			failCh <- url
 		}
 	}
 }
@@ -96,10 +92,6 @@ func main() {
 
 	fmt.Println(banner)
 	fmt.Println("jobs:", jobs)
-
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
 
 	/*---------------------------------FILEWORK---------------------------------------*/
 
@@ -112,23 +104,19 @@ func main() {
 	defer f.Close()
 	domainReader := bufio.NewReader(f)
 
-	//Creating install.txt and initializing writer on it
-
-	fi, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
+	installFile, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
-	defer fi.Close()
+	defer installFile.Close()
 
-	//Creating setup.txt and initializing writer on it
-
-	fs, err := os.OpenFile("setup.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
+	setupFile, err := os.OpenFile("setup.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
-	defer fs.Close()
+	defer setupFile.Close()
 
 	/*--------------------------------------------------------------------------------*/
 	/*--------------------------------START GOROUTINES--------------------------------*/
@@ -136,26 +124,30 @@ func main() {
 	start := time.Now()
 
 	urlCh := make(chan string, jobs)
-	resCh := make(chan string, jobs)
+	insCh := make(chan string, jobs)
+	setCh := make(chan string, jobs)
+	failCh := make(chan string, jobs)
 	errCh := make(chan string, jobs)
 
 	for i := 0; i < jobs; i++ {
 		wg.Add(1)
-		go scanner(urlCh, resCh, errCh)
+		go scan(urlCh, insCh, setCh, failCh, errCh)
 	}
 
 	// Response writer goroutine
-	//wg.Add(1)
 	go func() {
-		//defer wg.Done()
 		for {
 			select {
+			case res := <-insCh:
+				fmt.Printf("\t[+] Install ===> %s\n", res)
+				installFile.WriteString(res + "\n")
+			case res := <-setCh:
+				fmt.Printf("\t[+] Setup ===> %s\n", res)
+				setupFile.WriteString(res + "\n")
+			case res := <-failCh:
+				fmt.Printf(" [-] Fail ===> %s\n", res)
 			case err := <-errCh:
 				logger.Print(err)
-			case res := <-resCh:
-				fmt.Print(res)
-			default:
-				break
 			}
 		}
 	}()
@@ -185,7 +177,10 @@ func main() {
 	close(urlCh)
 	wg.Wait()
 	close(errCh)
-	close(resCh)
+	close(insCh)
+	close(setCh)
+	close(failCh)
+
 	fmt.Println("Time", time.Now().Sub(start))
 }
 
@@ -193,10 +188,12 @@ func init() {
 	//setting jobs flag to parse with initial value of 48 goroutines
 	flag.IntVar(&jobs, "jobs", 300, "number of goroutines to run")
 	flag.Parse()
+
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
 		os.Exit(2)
 	}
+
 	l, err := os.OpenFile("error.log", os.O_WRONLY+os.O_CREATE+os.O_TRUNC, 0660)
 	if err != nil {
 		logger = log.Default()
