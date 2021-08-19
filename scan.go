@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -38,17 +37,18 @@ var (
 	jobs int
 	wg   sync.WaitGroup
 
-	logger *log.Logger
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true, // Don't send: User-Agent: fasthttp
 		MaxConnDuration:          time.Minute,
 		MaxIdleConnDuration:      10 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
 	}
+
+	paths = []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
 )
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
-func scan(urlCh, insCh, setCh, failCh, errCh chan string) {
+func scan(urlCh, insCh, setCh, failCh chan string) {
 
 	res := fasthttp.AcquireResponse()
 	req := fasthttp.AcquireRequest()
@@ -63,20 +63,13 @@ func scan(urlCh, insCh, setCh, failCh, errCh chan string) {
 		req.SetRequestURI(url)
 
 		err := client.DoRedirects(req, res, maxRedirects)
-		if err != nil {
+		if err != nil || res.StatusCode() != 200 {
 			failCh <- url
-			errCh <- fmt.Sprintf("%s ===> %s\n", err.Error(), url)
 			continue
 		}
 
 		//Save body from erase
 		copy(bodyBuff, res.Body())
-		//bodyBuff = res.Body()
-
-		if res.StatusCode() != 200 {
-			failCh <- fmt.Sprintf("%s [%d]", url, res.StatusCode())
-			continue
-		}
 
 		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
 			insCh <- url
@@ -118,6 +111,26 @@ func main() {
 	}
 	defer setupFile.Close()
 
+	// Read domain file
+	var lines []string
+	var linesCount int
+
+	fmt.Println("Reading file", flag.Arg(0), "...")
+	for {
+		line, _, err := domainReader.ReadLine()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			fmt.Println("Error occured while reading domain list file")
+			return
+		}
+		linesCount++
+		lines = append(lines, string(line))
+	}
+
+	//Count urls to scan
+	urlsCount := linesCount * (len(paths))
+
 	/*--------------------------------------------------------------------------------*/
 	/*--------------------------------START GOROUTINES--------------------------------*/
 
@@ -127,47 +140,42 @@ func main() {
 	insCh := make(chan string, jobs)
 	setCh := make(chan string, jobs)
 	failCh := make(chan string, jobs)
-	errCh := make(chan string, jobs)
 
 	for i := 0; i < jobs; i++ {
 		wg.Add(1)
-		go scan(urlCh, insCh, setCh, failCh, errCh)
+		go scan(urlCh, insCh, setCh, failCh)
 	}
 
-	// Response writer goroutine
+	// Response printer routine
+
+	completed := 0
+	var printer sync.WaitGroup
+	printer.Add(1)
 	go func() {
-		for {
+		defer printer.Done()
+		for completed < urlsCount {
 			select {
 			case res := <-insCh:
-				fmt.Printf("\t[+] Install ===> %s\n", res)
+				completed++
+				fmt.Printf("![%d/%d] Install ===> %s\n", completed, urlsCount, res)
 				installFile.WriteString(res + "\n")
 			case res := <-setCh:
-				fmt.Printf("\t[+] Setup ===> %s\n", res)
+				completed++
+				fmt.Printf("![%d/%d] Setup ===> %s\n", completed, urlsCount, res)
 				setupFile.WriteString(res + "\n")
 			case res := <-failCh:
-				fmt.Printf(" [-] Fail ===> %s\n", res)
-			case err := <-errCh:
-				logger.Print(err)
+				completed++
+				fmt.Printf(" [%d/%d] Fail ===> %s\n", completed, urlsCount, res)
 			}
 		}
 	}()
 
 	/*--------------------------------------------------------------------------------*/
-	/*----------------------------READ & SEND URL+PATH TO THEM------------------------*/
+	/*----------------------------SEND SCHEMA+URL+PATH -------------------------------*/
 
-	paths := []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
-
-	for {
-		line, _, err := domainReader.ReadLine()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			fmt.Println("Error occured while reading domain list file")
-			logger.Println(err)
-			return
-		}
+	for _, line := range lines {
 		for _, path := range paths {
-			urlCh <- "http://" + string(line) + path
+			urlCh <- "http://" + line + path
 		}
 	}
 
@@ -176,7 +184,7 @@ func main() {
 
 	close(urlCh)
 	wg.Wait()
-	close(errCh)
+	printer.Wait()
 	close(insCh)
 	close(setCh)
 	close(failCh)
@@ -186,18 +194,11 @@ func main() {
 
 func init() {
 	//setting jobs flag to parse with initial value of 48 goroutines
-	flag.IntVar(&jobs, "jobs", 300, "number of goroutines to run")
+	flag.IntVar(&jobs, "jobs", 100, "number of goroutines to run")
 	flag.Parse()
 
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
 		os.Exit(2)
-	}
-
-	l, err := os.OpenFile("error.log", os.O_WRONLY+os.O_CREATE+os.O_TRUNC, 0660)
-	if err != nil {
-		logger = log.Default()
-	} else {
-		logger = log.New(l, "", 0)
 	}
 }
