@@ -21,7 +21,7 @@ var (
 	}
 )
 
-func scan(urlCh, insCh, setCh, failCh chan string) {
+func scan(urlCh chan string, resCh chan Resp) {
 
 	res := fasthttp.AcquireResponse()
 	req := fasthttp.AcquireRequest()
@@ -37,19 +37,16 @@ func scan(urlCh, insCh, setCh, failCh chan string) {
 
 		err := client.DoRedirects(req, res, maxRedirects)
 		if err != nil || res.StatusCode() != 200 {
-			failCh <- url
 			continue
 		}
-
 		//Save body from erase
 		copy(bodyBuff, res.Body())
 
 		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
-			insCh <- url
+			resCh <- Resp{INSTALL, url}
+
 		} else if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Setup Configuration File") {
-			setCh <- url
-		} else {
-			failCh <- url
+			resCh <- Resp{SETUP, url}
 		}
 	}
 }

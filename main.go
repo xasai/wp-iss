@@ -53,7 +53,7 @@ func main() {
 		return
 	}
 	domains := strings.Split(string(bDomains), "\n")
-	domainsLen := len(domains)
+	//domainsLen := len(domains)
 
 	// Create file to write install result
 	installFile, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
@@ -73,55 +73,47 @@ func main() {
 
 	start := time.Now()
 
-	// Setup goroutines chan and run goroutines
+	// Init goroutines chan and run goroutines itself
 	urlCh := make(chan string, jobs)
-	insCh := make(chan string, jobs)
-	setCh := make(chan string, jobs)
-	failCh := make(chan string, jobs)
+	resCh := make(chan Resp, jobs) // TODO read habr
 
 	for i := 0; i < jobs; i++ {
 		ScanWg.Add(1)
-		go scan(urlCh, insCh, setCh, failCh)
+		go scan(urlCh, resCh)
 	}
 
 	// Response printer routine
-
-	completed := 0
-	var printer sync.WaitGroup
-	printer.Add(1)
+	var RespWg sync.WaitGroup
+	RespWg.Add(1)
 	go func() {
-		defer printer.Done()
-		for completed < domainsLen {
-			select {
-			case res := <-insCh:
-				completed++
-				fmt.Printf("![%d/%d] Install ===> %s\n", completed, domainsLen, res)
-				installFile.WriteString(res + "\n")
-			case res := <-setCh:
-				completed++
-				fmt.Printf("![%d/%d] Setup ===> %s\n", completed, domainsLen, res)
-				setupFile.WriteString(res + "\n")
-			case res := <-failCh:
-				completed++
-				fmt.Printf(" [%d/%d] Fail ===> %s\n", completed, domainsLen, res)
+		defer RespWg.Done()
+		respCount := 0
+		for resp := range resCh {
+			respCount++
+			switch resp.Status {
+			case INSTALL:
+				fmt.Printf(" Setup ===> %s\n", resp.Url)
+				setupFile.WriteString(resp.Url + "\n")
+			case SETUP:
+				fmt.Printf(" Install ===> %s\n", resp.Url)
+				installFile.WriteString(resp.Url + "\n")
+			case FAIL:
+
 			}
 		}
 	}()
 
-	// Send domain to goroutine
+	// Send http:// + domain to goroutine
 	for _, domain := range domains {
 		urlCh <- "http://" + domain
 	}
 
-	/*--------------------------------------------------------------------------------*/
 	/*-------------------------------- 		END 	  --------------------------------*/
 
 	close(urlCh)
 	ScanWg.Wait()
-	printer.Wait()
-	close(insCh)
-	close(setCh)
-	close(failCh)
+	close(resCh)
+	RespWg.Wait()
 
 	fmt.Println("Time", time.Now().Sub(start))
 }

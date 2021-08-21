@@ -1,0 +1,12 @@
++ read file all from file in one time then parse to strings
+- 
+- remove Failure writing
+- create beatiful status bar
+- response with response struct via chan
+
+- refactor logic of requests:
+	404 or no connection -> leave requests, and maybe not send any info to chan?
+	left only 2 chan to send result install and setup
+
+
+- connection Timeout 3 sec

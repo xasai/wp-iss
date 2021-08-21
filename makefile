@@ -1,7 +1,7 @@
 all: wpscan
 
-wpscan: scan.go
-	go build -ldflags "-w -s" -o wpscan scan.go
+wpscan: scan.go main.go response.go
+	go build -ldflags "-w -s" -o wpscan ./... 
 
 
 lclean:
