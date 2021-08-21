@@ -8,7 +8,8 @@ type Resp struct {
 type Status int8
 
 const (
-	FAIL Status = iota
+	_ Status = iota
 	SETUP
+	FAIL
 	INSTALL
 )

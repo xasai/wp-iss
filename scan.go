@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"time"
 
@@ -13,15 +14,20 @@ const (
 )
 
 var (
+	paths = []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
+
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true, // Don't send: User-Agent: fasthttp
 		MaxConnDuration:          time.Minute,
 		MaxIdleConnDuration:      10 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
+		Dial: func(addr string) (net.Conn, error) {
+			return fasthttp.DialTimeout(addr, 3*time.Second)
+		},
 	}
 )
 
-func scan(urlCh chan string, resCh chan Resp) {
+func scan(urlCh chan string, resCh chan *Resp) {
 
 	res := fasthttp.AcquireResponse()
 	req := fasthttp.AcquireRequest()
@@ -36,17 +42,23 @@ func scan(urlCh chan string, resCh chan Resp) {
 		req.SetRequestURI(url)
 
 		err := client.DoRedirects(req, res, maxRedirects)
-		if err != nil || res.StatusCode() != 200 {
+		switch {
+		case err != nil:
 			continue
+		case res.StatusCode() != 200:
+			resCh <- &Resp{FAIL, ""}
 		}
+
 		//Save body from erase
 		copy(bodyBuff, res.Body())
 
 		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
-			resCh <- Resp{INSTALL, url}
+			resCh <- &Resp{INSTALL, url}
 
 		} else if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Setup Configuration File") {
-			resCh <- Resp{SETUP, url}
+			resCh <- &Resp{SETUP, url}
+		} else {
+			resCh <- &Resp{FAIL, url}
 		}
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 const (
@@ -31,8 +33,6 @@ const (
 var (
 	jobs   int
 	ScanWg sync.WaitGroup
-
-	paths = []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
 )
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
@@ -46,14 +46,13 @@ func main() {
 		fmt.Printf(err.Error())
 		return
 	}
-	bDomains, err := io.ReadAll(f)
+	rdata, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
 		fmt.Printf(err.Error())
 		return
 	}
-	domains := strings.Split(string(bDomains), "\n")
-	//domainsLen := len(domains)
+	urls := strings.Split(string(rdata), "\n")
 
 	// Create file to write install result
 	installFile, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
@@ -73,44 +72,58 @@ func main() {
 
 	start := time.Now()
 
-	// Init goroutines chan and run goroutines itself
-	urlCh := make(chan string, jobs)
-	resCh := make(chan Resp, jobs) // TODO read habr
+	//main will send urls from domain list for scanners routines
+	urlCh := make(chan string, len(urls))
 
+	//printer routine will receive result from all scanners routines
+	resCh := make(chan *Resp, jobs) // TODO read habr
+
+	//launch scanners
 	for i := 0; i < jobs; i++ {
 		ScanWg.Add(1)
 		go scan(urlCh, resCh)
 	}
 
-	// Response printer routine
+	//launch printer routine
 	var RespWg sync.WaitGroup
-	RespWg.Add(1)
 	go func() {
+		RespWg.Add(1)
 		defer RespWg.Done()
-		respCount := 0
+
+		bar := progressbar.NewOptions(
+			len(urls),
+			progressbar.OptionClearOnFinish(),
+			progressbar.OptionShowCount(),
+			progressbar.OptionThrottle(time.Second/30),
+		)
+
 		for resp := range resCh {
-			respCount++
 			switch resp.Status {
 			case INSTALL:
-				fmt.Printf(" Setup ===> %s\n", resp.Url)
+				bar.Clear()
+				fmt.Printf(" [+] Install ===> %s\n", resp.Url)
+				bar.Add(1)
 				setupFile.WriteString(resp.Url + "\n")
 			case SETUP:
-				fmt.Printf(" Install ===> %s\n", resp.Url)
+				bar.Clear()
+				fmt.Printf(" [+] Setup ===> %s\n", resp.Url)
+				bar.Add(1)
 				installFile.WriteString(resp.Url + "\n")
 			case FAIL:
-
+				bar.Add(1)
 			}
 		}
+		bar.Close()
 	}()
 
-	// Send http:// + domain to goroutine
-	for _, domain := range domains {
-		urlCh <- "http://" + domain
+	// Send http:// + url to scanners routines
+	for _, url := range urls {
+		urlCh <- "http://" + url
 	}
 
-	/*-------------------------------- 		END 	  --------------------------------*/
-
 	close(urlCh)
+
+	//Wait for scanners
 	ScanWg.Wait()
 	close(resCh)
 	RespWg.Wait()
@@ -119,10 +132,8 @@ func main() {
 }
 
 func init() {
-	//setting jobs flag to parse with initial value of 48 goroutines
 	flag.IntVar(&jobs, "jobs", 100, "number of goroutines to run")
 	flag.Parse()
-
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
 		os.Exit(2)
