@@ -1,15 +1,14 @@
 all: wpscan
 
-wpscan: scan.go main.go response.go
-	go build -ldflags "-w -s" -o wpscan ./... 
+wpscan:
+	go build -ldflags "-w -s" -o scan ./... 
 
-
-lclean:
+clean:
 	echo > setup.txt > install.txt
 
-fclean:
-	rm -rf wpscan
+fclean: clean
+	rm -rf scan
 
 re: fclean all
 
-.PHONY: all lclean fclean re
+.PHONY: all lclean fclean re wpscan

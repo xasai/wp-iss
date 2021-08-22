@@ -4,12 +4,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"log"
+
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/schollz/progressbar/v3"
+	"github.com/valyala/fasthttp"
 )
 
 const (
@@ -23,22 +30,33 @@ const (
 												
 	   [+] WP Install and Setup Scanner
 	   [+] Recoded By TiGER HeX [+] We Are TiGER HeX
-
 	   `
 	usage = "USAGE:\tscan [--jobs jobsnum] FILE "
+
+	maxRedirects = 20
+	maxBodySize  = 15000
 
 	minBodySize = 2000
 )
 
 var (
-	jobs   int
-	ScanWg sync.WaitGroup
+	jobs     int
+	reqTotal uint64
+	ScanWg   sync.WaitGroup
+
+	logger *log.Logger
+	client *fasthttp.Client
 )
 
 /*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
 func main() {
 	fmt.Println(banner)
-	fmt.Println("jobs:", jobs)
+	fmt.Println(" jobs:", jobs)
+
+	//PPROF
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 
 	// Read domain list from specefied file
 	f, err := os.Open(flag.Arg(0))
@@ -73,10 +91,10 @@ func main() {
 	start := time.Now()
 
 	//main will send urls from domain list for scanners routines
-	urlCh := make(chan string, len(urls))
+	urlCh := make(chan string)
 
 	//printer routine will receive result from all scanners routines
-	resCh := make(chan *Resp, jobs) // TODO read habr
+	resCh := make(chan *Resp, jobs)
 
 	//launch scanners
 	for i := 0; i < jobs; i++ {
@@ -121,14 +139,15 @@ func main() {
 		urlCh <- "http://" + url
 	}
 
+	//Wait for scanners end
 	close(urlCh)
-
-	//Wait for scanners
 	ScanWg.Wait()
+
+	//Wait for printer end
 	close(resCh)
 	RespWg.Wait()
 
-	fmt.Println("Time", time.Now().Sub(start))
+	fmt.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
 }
 
 func init() {
@@ -137,5 +156,19 @@ func init() {
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
 		os.Exit(2)
+	}
+	logf, _ := os.Create(".miss")
+	logger = log.New(logf, "", 0)
+
+	client = &fasthttp.Client{
+		NoDefaultUserAgentHeader: true,
+		MaxConnDuration:          7 * time.Second, //check this out FIXME
+		MaxIdleConnDuration:      7 * time.Second,
+		ReadTimeout:              7 * time.Second,
+		WriteTimeout:             7 * time.Second,
+		MaxResponseBodySize:      maxBodySize,
+		Dial: func(addr string) (net.Conn, error) {
+			return fasthttp.DialTimeout(addr, 7*time.Second)
+		},
 	}
 }

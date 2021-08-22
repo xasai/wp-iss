@@ -1,31 +1,13 @@
 package main
 
 import (
-	"net"
 	"strings"
-	"time"
+	"sync/atomic"
 
 	"github.com/valyala/fasthttp"
 )
 
-const (
-	maxRedirects = 20
-	maxBodySize  = 15000
-)
-
-var (
-	paths = []string{"/", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
-
-	client = &fasthttp.Client{
-		NoDefaultUserAgentHeader: true, // Don't send: User-Agent: fasthttp
-		MaxConnDuration:          time.Minute,
-		MaxIdleConnDuration:      10 * time.Second,
-		MaxResponseBodySize:      maxBodySize,
-		Dial: func(addr string) (net.Conn, error) {
-			return fasthttp.DialTimeout(addr, 3*time.Second)
-		},
-	}
-)
+var paths = []string{"/wp-admin", "/wordpress", "/wp", "/blog", "/new", "/old", "/newsite", "/test", "/main", "/cms", "/dev", "/backup"}
 
 func scan(urlCh chan string, resCh chan *Resp) {
 
@@ -36,29 +18,63 @@ func scan(urlCh chan string, resCh chan *Resp) {
 	defer fasthttp.ReleaseRequest(req)
 	defer ScanWg.Done()
 
-	bodyBuff := make([]byte, maxBodySize)
+	//bodyBuff := make([]byte, maxBodySize)
+
+	for url := range urlCh {
+		req.SetRequestURI(url)
+		req.SetConnectionClose()
+
+		atomic.AddUint64(&reqTotal, 1)
+
+		err := client.DoRedirects(req, res, maxRedirects)
+		if err != nil || res.StatusCode() != fasthttp.StatusOK {
+			resCh <- &Resp{FAIL, ""}
+			continue
+		} /* else if res.StatusCode() != fasthttp.StatusOK { // code != 200
+			resCh <- &Resp{FAIL, ""}
+			continue
+		}*/
+
+		if strings.Contains(res.String(), "WordPress &rsaquo; Installation") {
+			resCh <- &Resp{INSTALL, url}
+			logger.Println(url, res.String())
+		} else if strings.Contains(res.String(), "WordPress &rsaquo; Setup Configuration File") {
+			resCh <- &Resp{SETUP, url}
+			logger.Println(url, res.String())
+		} else {
+			resCh <- &Resp{FAIL, url}
+		}
+	}
+}
+
+func scan2(urlCh chan string, resCh chan *Resp) {
+
+	res := fasthttp.AcquireResponse()
+	req := fasthttp.AcquireRequest()
+
+	defer fasthttp.ReleaseResponse(res)
+	defer fasthttp.ReleaseRequest(req)
+	defer ScanWg.Done()
 
 	for url := range urlCh {
 		req.SetRequestURI(url)
 
+		atomic.AddUint64(&reqTotal, 1)
 		err := client.DoRedirects(req, res, maxRedirects)
-		switch {
-		case err != nil:
-			continue
-		case res.StatusCode() != 200:
+		if err != nil || res.StatusCode() != fasthttp.StatusOK {
 			resCh <- &Resp{FAIL, ""}
+			continue
 		}
-
-		//Save body from erase
-		copy(bodyBuff, res.Body())
-
-		if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Installation") {
+		if strings.Contains(res.String(), "WordPress &rsaquo; Installation") {
 			resCh <- &Resp{INSTALL, url}
-
-		} else if strings.Contains(string(bodyBuff), "WordPress &rsaquo; Setup Configuration File") {
+			logger.Println(url, res.String())
+		}
+		if strings.Contains(res.String(), "WordPress &rsaquo; Setup Configuration File") {
 			resCh <- &Resp{SETUP, url}
-		} else {
-			resCh <- &Resp{FAIL, url}
+			logger.Println(url, res.String())
+		}
+		for path := range paths {
+
 		}
 	}
 }
