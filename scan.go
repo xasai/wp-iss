@@ -17,64 +17,55 @@ func scan(urlCh chan string, resCh chan *Resp) {
 	defer fasthttp.ReleaseResponse(res)
 	defer fasthttp.ReleaseRequest(req)
 	defer ScanWg.Done()
-
-	//bodyBuff := make([]byte, maxBodySize)
-
-	for url := range urlCh {
+	for url := range urlCh { // scan url w/o any path
 		req.SetRequestURI(url)
-		req.SetConnectionClose()
-
-		atomic.AddUint64(&reqTotal, 1)
-
-		err := client.DoRedirects(req, res, maxRedirects)
-		if err != nil || res.StatusCode() != fasthttp.StatusOK {
+		status, err := scanUnit(req, res)
+		if (err != nil && err != fasthttp.ErrBodyTooLarge) || res.StatusCode() != fasthttp.StatusOK {
 			resCh <- &Resp{FAIL, ""}
 			continue
-		} /* else if res.StatusCode() != fasthttp.StatusOK { // code != 200
-			resCh <- &Resp{FAIL, ""}
-			continue
-		}*/
-
-		if strings.Contains(res.String(), "WordPress &rsaquo; Installation") {
-			resCh <- &Resp{INSTALL, url}
-			logger.Println(url, res.String())
-		} else if strings.Contains(res.String(), "WordPress &rsaquo; Setup Configuration File") {
-			resCh <- &Resp{SETUP, url}
-			logger.Println(url, res.String())
-		} else {
-			resCh <- &Resp{FAIL, url}
 		}
+
+		// Go to next url if I/S found
+		if status != FAIL {
+			resCh <- &Resp{status, url}
+			continue
+		}
+
+		// Scan every sub path in url
+		for _, path := range paths {
+			req.SetRequestURI(url + path)
+			status, _ = scanUnit(req, res)
+			// break path loop if succeed
+			if status != FAIL {
+				resCh <- &Resp{status, url + path}
+				break
+			}
+		}
+
+		// And go to next url if loop if succeed
+		if status != FAIL {
+			continue
+		}
+
+		// Check ?author=1 parameter redirect to user
 	}
 }
 
-func scan2(urlCh chan string, resCh chan *Resp) {
-
-	res := fasthttp.AcquireResponse()
-	req := fasthttp.AcquireRequest()
-
-	defer fasthttp.ReleaseResponse(res)
-	defer fasthttp.ReleaseRequest(req)
-	defer ScanWg.Done()
-
-	for url := range urlCh {
-		req.SetRequestURI(url)
-
-		atomic.AddUint64(&reqTotal, 1)
-		err := client.DoRedirects(req, res, maxRedirects)
-		if err != nil || res.StatusCode() != fasthttp.StatusOK {
-			resCh <- &Resp{FAIL, ""}
-			continue
-		}
-		if strings.Contains(res.String(), "WordPress &rsaquo; Installation") {
-			resCh <- &Resp{INSTALL, url}
-			logger.Println(url, res.String())
-		}
-		if strings.Contains(res.String(), "WordPress &rsaquo; Setup Configuration File") {
-			resCh <- &Resp{SETUP, url}
-			logger.Println(url, res.String())
-		}
-		for path := range paths {
-
-		}
+func scanUnit(req *fasthttp.Request, res *fasthttp.Response) (Status, error) {
+	atomic.AddUint64(&reqTotal, 1)
+	err := client.DoRedirects(req, res, maxRedirects)
+	if err != nil || res.StatusCode() != fasthttp.StatusOK {
+		return FAIL, err
 	}
+	return checkResponse(res.String()), nil
+}
+
+func checkResponse(body string) Status {
+	if strings.Contains(body, "WordPress &rsaquo; Installation") {
+		return INSTALL
+	}
+	if strings.Contains(body, "WordPress &rsaquo; Setup Configuration File") {
+		return SETUP
+	}
+	return FAIL
 }

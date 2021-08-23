@@ -40,18 +40,28 @@ const (
 )
 
 var (
-	jobs     int
-	reqTotal uint64
-	ScanWg   sync.WaitGroup
-
-	logger *log.Logger
-	client *fasthttp.Client
+	jobs        int
+	reqTotal    uint64
+	ScanWg      sync.WaitGroup
+	logger      *log.Logger
+	client      *fasthttp.Client
+	dialTimeout time.Duration = time.Second * 5
 )
 
-/*-------------------------GOROUTINE'S ENTRYPOINT----------------------------*/
 func main() {
 	fmt.Println(banner)
 	fmt.Println(" jobs:", jobs)
+
+	logger.Println(" =======================================")
+	logger.Println(" jobs:", jobs,
+		"| MaxConnDuration: ", client.MaxConnDuration,
+		"| MaxIdleConnDuration: ", client.MaxIdleConnDuration,
+		"| ReadTimeout: ", client.ReadTimeout,
+		"\n WriteTimeout: ", client.WriteTimeout,
+		"| MaxConnWaitTimeout: ", client.MaxConnWaitTimeout,
+		"| MaxResponseBodySize: ", client.MaxResponseBodySize,
+		"| DialTimeout: ", dialTimeout,
+	)
 
 	//PPROF
 	go func() {
@@ -70,7 +80,9 @@ func main() {
 		fmt.Printf(err.Error())
 		return
 	}
-	urls := strings.Split(string(rdata), "\n")
+
+	//trim \n to avoid empty line in last slice value
+	urls := strings.Split(strings.TrimRight(string(rdata), "\n"), "\n")
 
 	// Create file to write install result
 	installFile, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
@@ -91,7 +103,7 @@ func main() {
 	start := time.Now()
 
 	//main will send urls from domain list for scanners routines
-	urlCh := make(chan string)
+	urlCh := make(chan string, 1024)
 
 	//printer routine will receive result from all scanners routines
 	resCh := make(chan *Resp, jobs)
@@ -120,11 +132,13 @@ func main() {
 			case INSTALL:
 				bar.Clear()
 				fmt.Printf(" [+] Install ===> %s\n", resp.Url)
+				logger.Printf(" Install %s\n", resp.Url)
 				bar.Add(1)
 				setupFile.WriteString(resp.Url + "\n")
 			case SETUP:
 				bar.Clear()
 				fmt.Printf(" [+] Setup ===> %s\n", resp.Url)
+				logger.Printf(" Setup %s\n", resp.Url)
 				bar.Add(1)
 				installFile.WriteString(resp.Url + "\n")
 			case FAIL:
@@ -139,15 +153,16 @@ func main() {
 		urlCh <- "http://" + url
 	}
 
-	//Wait for scanners end
+	//Wait scanners end
 	close(urlCh)
 	ScanWg.Wait()
 
-	//Wait for printer end
+	//Wait printer end
 	close(resCh)
 	RespWg.Wait()
 
 	fmt.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
+	logger.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
 }
 
 func init() {
@@ -157,18 +172,25 @@ func init() {
 		fmt.Println(usage)
 		os.Exit(2)
 	}
-	logf, _ := os.Create(".miss")
+
+	//FIXME
+	logf, err := os.OpenFile(flag.Arg(0)+"_found", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(2)
+	}
 	logger = log.New(logf, "", 0)
 
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true,
-		MaxConnDuration:          7 * time.Second, //check this out FIXME
-		MaxIdleConnDuration:      7 * time.Second,
-		ReadTimeout:              7 * time.Second,
-		WriteTimeout:             7 * time.Second,
+		MaxConnDuration:          time.Minute, // do we need reconect every time then?
+		MaxIdleConnDuration:      time.Minute,
+		ReadTimeout:              3 * time.Second,
+		WriteTimeout:             3 * time.Second,
+		MaxConnWaitTimeout:       3 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
 		Dial: func(addr string) (net.Conn, error) {
-			return fasthttp.DialTimeout(addr, 7*time.Second)
+			return fasthttp.DialTimeout(addr, dialTimeout)
 		},
 	}
 }
