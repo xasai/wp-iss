@@ -40,18 +40,25 @@ const (
 )
 
 var (
-	jobs        int
-	reqTotal    uint64
-	ScanWg      sync.WaitGroup
-	logger      *log.Logger
-	client      *fasthttp.Client
-	dialTimeout time.Duration = time.Second * 5
+
+	//Flag -jobs
+	jobs int = 100 //default value
+
+	//Flag -t
+	dialTimeout int64 = 3 //default value
+
+	reqTotal uint64
+	ScanWg   sync.WaitGroup
+	logger   *log.Logger
+	client   *fasthttp.Client
 )
 
 func main() {
 	fmt.Println(banner)
 	fmt.Println(" jobs:", jobs)
 
+	//////////////////////////////////////////////////////////////
+	// THIS is for Debug only
 	logger.Println(" =======================================")
 	logger.Println(" jobs:", jobs,
 		"| MaxConnDuration: ", client.MaxConnDuration,
@@ -62,11 +69,10 @@ func main() {
 		"| MaxResponseBodySize: ", client.MaxResponseBodySize,
 		"| DialTimeout: ", dialTimeout,
 	)
-
-	//PPROF
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
+	//////////////////////////////////////////////////////////////
 
 	// Read domain list from specefied file
 	f, err := os.Open(flag.Arg(0))
@@ -162,11 +168,14 @@ func main() {
 	RespWg.Wait()
 
 	fmt.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
+
 	logger.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
 }
 
 func init() {
-	flag.IntVar(&jobs, "jobs", 100, "number of goroutines to run")
+	flag.IntVar(&jobs, "jobs", jobs, "number of goroutines to run")
+	flag.Int64Var(&dialTimeout, "t", dialTimeout, "dial timeout")
+
 	flag.Parse()
 	if len(flag.Args()) < 1 {
 		fmt.Println(usage)
@@ -183,14 +192,14 @@ func init() {
 
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true,
-		MaxConnDuration:          time.Minute, // do we need reconect every time then?
+		MaxConnDuration:          time.Minute,
 		MaxIdleConnDuration:      time.Minute,
 		ReadTimeout:              3 * time.Second,
 		WriteTimeout:             3 * time.Second,
 		MaxConnWaitTimeout:       3 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
 		Dial: func(addr string) (net.Conn, error) {
-			return fasthttp.DialTimeout(addr, dialTimeout)
+			return fasthttp.DialTimeout(addr, time.Second*time.Duration(dialTimeout))
 		},
 	}
 }
