@@ -4,13 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"log"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -31,48 +31,29 @@ const (
 	   [+] WP Install and Setup Scanner
 	   [+] Recoded By TiGER HeX [+] We Are TiGER HeX
 	   `
-	usage = "USAGE:\tscan [--jobs jobsnum] FILE "
+	usage = "USAGE:\tscan [--jobs jobs_num] FILE "
 
 	maxRedirects = 20
-	maxBodySize  = 15000
 
+	maxBodySize = 300000
 	minBodySize = 2000
 )
 
 var (
-
-	//Flag -jobs
-	jobs int = 100 //default value
-
-	//Flag -t
-	dialTimeout int64 = 3 //default value
+	//Flags
+	jobs        int   = 1000 //default value of threads ! change this
+	dialTimeout int64 = 3    //seconds
 
 	reqTotal uint64
 	ScanWg   sync.WaitGroup
 	logger   *log.Logger
+	errlog   *log.Logger
 	client   *fasthttp.Client
 )
 
 func main() {
 	fmt.Println(banner)
 	fmt.Println(" jobs:", jobs)
-
-	//////////////////////////////////////////////////////////////
-	// THIS is for Debug only
-	logger.Println(" =======================================")
-	logger.Println(" jobs:", jobs,
-		"| MaxConnDuration: ", client.MaxConnDuration,
-		"| MaxIdleConnDuration: ", client.MaxIdleConnDuration,
-		"| ReadTimeout: ", client.ReadTimeout,
-		"\n WriteTimeout: ", client.WriteTimeout,
-		"| MaxConnWaitTimeout: ", client.MaxConnWaitTimeout,
-		"| MaxResponseBodySize: ", client.MaxResponseBodySize,
-		"| DialTimeout: ", dialTimeout,
-	)
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
-	//////////////////////////////////////////////////////////////
 
 	// Read domain list from specefied file
 	f, err := os.Open(flag.Arg(0))
@@ -87,8 +68,7 @@ func main() {
 		return
 	}
 
-	//trim \n to avoid empty line in last slice value
-	urls := strings.Split(strings.TrimRight(string(rdata), "\n"), "\n")
+	urls := strings.Split(strings.TrimRight(strings.Replace(string(rdata), "\r\n", "\n", -1), "\n"), "\n")
 
 	// Create file to write install result
 	installFile, err := os.OpenFile("install.txt", os.O_CREATE+os.O_APPEND+os.O_WRONLY, 0660)
@@ -109,14 +89,14 @@ func main() {
 	start := time.Now()
 
 	//main will send urls from domain list for scanners routines
-	urlCh := make(chan string, 1024)
+	urlCh := make(chan string)
 
 	//printer routine will receive result from all scanners routines
-	resCh := make(chan *Resp, jobs)
+	resCh := make(chan *Resp, 10)
 
 	//launch scanners
+	ScanWg.Add(jobs)
 	for i := 0; i < jobs; i++ {
-		ScanWg.Add(1)
 		go scan(urlCh, resCh)
 	}
 
@@ -130,9 +110,9 @@ func main() {
 			len(urls),
 			progressbar.OptionClearOnFinish(),
 			progressbar.OptionShowCount(),
-			progressbar.OptionThrottle(time.Second/30),
+			progressbar.OptionThrottle(time.Millisecond*60),
 		)
-
+		defer bar.Close()
 		for resp := range resCh {
 			switch resp.Status {
 			case INSTALL:
@@ -140,18 +120,17 @@ func main() {
 				fmt.Printf(" [+] Install ===> %s\n", resp.Url)
 				logger.Printf(" Install %s\n", resp.Url)
 				bar.Add(1)
-				setupFile.WriteString(resp.Url + "\n")
+				installFile.WriteString(resp.Url + "\n")
 			case SETUP:
 				bar.Clear()
 				fmt.Printf(" [+] Setup ===> %s\n", resp.Url)
 				logger.Printf(" Setup %s\n", resp.Url)
 				bar.Add(1)
-				installFile.WriteString(resp.Url + "\n")
+				setupFile.WriteString(resp.Url + "\n")
 			case FAIL:
 				bar.Add(1)
 			}
 		}
-		bar.Close()
 	}()
 
 	// Send http:// + url to scanners routines
@@ -162,19 +141,22 @@ func main() {
 	//Wait scanners end
 	close(urlCh)
 	ScanWg.Wait()
-
 	//Wait printer end
 	close(resCh)
 	RespWg.Wait()
 
 	fmt.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
-
-	logger.Println("", time.Now().Sub(start), "Requests total:", reqTotal)
+	logger.Println("", time.Now().Sub(start), "Requests total:", reqTotal,
+		"")
 }
 
 func init() {
-	flag.IntVar(&jobs, "jobs", jobs, "number of goroutines to run")
+
+	var logOn bool
+
+	flag.IntVar(&jobs, "j", jobs, "number of goroutines to run")
 	flag.Int64Var(&dialTimeout, "t", dialTimeout, "dial timeout")
+	flag.BoolVar(&logOn, "l", false, "enables error log and bench")
 
 	flag.Parse()
 	if len(flag.Args()) < 1 {
@@ -182,24 +164,54 @@ func init() {
 		os.Exit(2)
 	}
 
-	//FIXME
-	logf, err := os.OpenFile(flag.Arg(0)+"_found", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
-	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
-	}
-	logger = log.New(logf, "", 0)
-
 	client = &fasthttp.Client{
 		NoDefaultUserAgentHeader: true,
-		MaxConnDuration:          time.Minute,
-		MaxIdleConnDuration:      time.Minute,
-		ReadTimeout:              3 * time.Second,
-		WriteTimeout:             3 * time.Second,
-		MaxConnWaitTimeout:       3 * time.Second,
+		MaxConnDuration:          20 * time.Second,
+		MaxIdleConnDuration:      20 * time.Second,
+		ReadTimeout:              5 * time.Second,
+		WriteTimeout:             5 * time.Second,
+		MaxConnWaitTimeout:       5 * time.Second,
 		MaxResponseBodySize:      maxBodySize,
 		Dial: func(addr string) (net.Conn, error) {
 			return fasthttp.DialTimeout(addr, time.Second*time.Duration(dialTimeout))
 		},
 	}
+
+	if logOn {
+		initLoggers()
+	} else {
+		logger = log.New(ioutil.Discard, "", 0)
+		errlog = log.New(ioutil.Discard, "", 0)
+	}
+}
+
+func initLoggers() {
+	logf, err := os.OpenFile(flag.Arg(0)+"_bench", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(2)
+	}
+
+	logger = log.New(logf, "", 0)
+
+	logf, err = os.OpenFile("errlog", os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(2)
+	}
+	errlog = log.New(logf, "", 0)
+
+	logger.Println(" =======================================")
+	logger.Println(" jobs:", jobs,
+		"| MaxConnDuration: ", client.MaxConnDuration,
+		"| MaxIdleConnDuration: ", client.MaxIdleConnDuration,
+		"| ReadTimeout: ", client.ReadTimeout,
+		"\n WriteTimeout: ", client.WriteTimeout,
+		"| MaxConnWaitTimeout: ", client.MaxConnWaitTimeout,
+		"| MaxResponseBodySize: ", client.MaxResponseBodySize,
+		"| DialTimeout: ", dialTimeout,
+	)
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 }

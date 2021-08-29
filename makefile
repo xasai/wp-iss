@@ -1,10 +1,13 @@
 all: wpscan
 
+run:
+	./scan --jobs 10000 -t 10 ./d/d2
+
 wpscan:
-	go build -ldflags "-w -s" -o scan ./... 
+	go build  -o scan ./...
 
 clean:
-	echo > setup.txt > install.txt
+	rm -rf errlog install.txt setup.txt
 
 fclean: clean
 	rm -rf scan

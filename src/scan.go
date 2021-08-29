@@ -17,10 +17,13 @@ func scan(urlCh chan string, resCh chan *Resp) {
 	defer fasthttp.ReleaseResponse(res)
 	defer fasthttp.ReleaseRequest(req)
 	defer ScanWg.Done()
-	for url := range urlCh { // scan url w/o any path
+	for url := range urlCh {
+
 		req.SetRequestURI(url)
+
 		status, err := scanUnit(req, res)
-		if (err != nil && err != fasthttp.ErrBodyTooLarge) || res.StatusCode() != fasthttp.StatusOK {
+
+		if err != nil || res.StatusCode() != fasthttp.StatusOK {
 			resCh <- &Resp{FAIL, ""}
 			continue
 		}
@@ -42,20 +45,23 @@ func scan(urlCh chan string, resCh chan *Resp) {
 			}
 		}
 
-		// And go to next url if loop if succeed
-		if status != FAIL {
-			continue
+		if status == FAIL {
+			resCh <- &Resp{FAIL, url}
 		}
-
-		// Check ?author=1 parameter redirect to user
 	}
 }
 
 func scanUnit(req *fasthttp.Request, res *fasthttp.Response) (Status, error) {
+
 	atomic.AddUint64(&reqTotal, 1)
+
 	err := client.DoRedirects(req, res, maxRedirects)
-	if err != nil || res.StatusCode() != fasthttp.StatusOK {
+	if err != nil {
+		//errlog.Println(err.Error(), res.StatusCode(), req.URI()) //Debug
 		return FAIL, err
+	}
+	if res.StatusCode() != fasthttp.StatusOK {
+		return FAIL, nil
 	}
 	return checkResponse(res.String()), nil
 }
