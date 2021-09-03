@@ -1,7 +1,7 @@
 # WP-ISS
 High Performance Golang Wordpress spider based on [valyala/fasthttp](https://github.com/valyala/fasthttp).\
 \
-It may scan billion of sites in a hour.
+It may run more than 1000 scanner goroutines at once.
 
 **WARNING:**
   > Beware limit of maximum open files with:\
