@@ -14,4 +14,4 @@ OPTIONS :
    - -l                    enables error log and bench\
    - -t (num)         dial timeout (default 3)\
 
-<img src="/example/g.gif?raw=true">
+<img src="/assets/g.gif?raw=true">
