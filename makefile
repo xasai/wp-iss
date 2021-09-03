@@ -1,17 +1,16 @@
-all: wpscan
+all: build 
 
-run:
-	./scan --jobs 10000 -t 10 ./d/d2
-
-wpscan:
-	go build  -o scan ./...
+test: build
+	./wpscan -l test
+build:
+	go build -o wpscan ./...
 
 clean:
-	rm -rf errlog install.txt setup.txt
+	rm -rf result
 
 fclean: clean
 	rm -rf scan
 
 re: fclean all
 
-.PHONY: all lclean fclean re wpscan
+.PHONY: all lclean fclean re wpscan test

@@ -1,0 +1,34 @@
+ TODO
+ - rebuild scan logic : IMPOSSIBE FOR NOW
+	wp-admin/
+	----
+	----
+	scan trickbd.com/path...
+	if no setup or install
+		scan trickbd.com?author=1
+			if redirect to https://trickbd.com/author/authorname/
+				scan author/nasir/path...
+	----
+
+=======================================================================================================
+
++  try to run on WINDOWS computer
+
++ read all from file in one sys_read then parse to strings slice
+
++ response with response struct via chan
+
++ remove Failure writing
+
++ create beautiful status bar
+
++ Made connection Timeout 3 sec 
+
++ BUG: sometimes gives wrong sites to install/setup
+	SOLVED -> fill buffers with zero
+
++ Runs very slow at the end. Many goroutines !await! in the end 
+	SOLVED -> Client Read & Write Timeout
++ Remove empty urls scan 
++ bench
++ 404 or err on first -> return FAIL 
