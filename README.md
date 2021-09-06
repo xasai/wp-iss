@@ -4,7 +4,7 @@ High Performance Golang Wordpress spider based on [valyala/fasthttp](https://git
 It may run more than 1000 scanner goroutines at once.
 
 **WARNING:**
-  > Beware limit of maximum open files with:\
+  > Beware limit of maximum open files (sockets) with:\
   <code>ulimit -n verylongnum </code>
   
 # How to run
