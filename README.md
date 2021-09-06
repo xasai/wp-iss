@@ -9,6 +9,8 @@ It may run more than 1000 scanner goroutines at once.
   
 # How to run
 
+./wpscan [OPTIONS] domain_list
+
 OPTIONS :
    - -j --jobs (num) number of goroutines to run (default 100)
    - -l                    enables error log and bench
